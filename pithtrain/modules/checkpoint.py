@@ -419,9 +419,13 @@ def find_checkpoint(root: Optional[Path]) -> Optional[int]:
     The step counts completed units of work rather than naming the last one, so a resuming run
     continues at exactly this number. With five steps done, the next one to run is five. Storing the
     count rather than the index is what keeps every caller free of offset arithmetic.
+
+    Only complete checkpoints count. DCP writes .metadata after every rank's data, so a step
+    directory without it is a save that was interrupted, and it is skipped.
     """
     if root is None: return None  # fmt: skip
-    latest = max(Path(root, "torch-dcp").glob("[0-9]" * 8), default=None)
+    steps = Path(root, "torch-dcp").glob("[0-9]" * 8)
+    latest = max((step for step in steps if Path(step, ".metadata").is_file()), default=None)
     return int(latest.name) if latest is not None else None
 
 
