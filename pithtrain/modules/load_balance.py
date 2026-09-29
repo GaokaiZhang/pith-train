@@ -281,6 +281,11 @@ def replay_indices(
     The replayed top-k indices from gate.router_replay, or None if none is installed.
 
     Resolved in eager so the compiled gate gets them as an input, not traced Python state.
+    router_replay(num_tokens, top_k) returns expert ids [num_tokens, top_k] as a contiguous int64 or
+    int32 tensor on the current device, one row per token of hidden_states in the order the rank
+    holds them: under context parallelism, its zigzag share of each sequence as the loader cut it.
+    The call comes once per gate per forward and never from a backward, so a store installs one
+    callable per gate and keys routes by that gate's layer and training.current_microbatch.
     """
     if gate.router_replay is None:
         return None
