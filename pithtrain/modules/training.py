@@ -525,13 +525,15 @@ def offload_training_state() -> None:
         if isinstance(module, FSDPModule):
             module.reshard()
 
+    evicted = []
     for storage in _training_state_storages():
         host = _take_pinned(storage.size())
         host.copy_(_storage_bytes(storage), non_blocking=True)
-        _offloaded_state.append((storage, host))
+        evicted.append((storage, host))
 
-    # The copies are asynchronous, so nothing may be freed until they land.
+    # Publish and free only after all copies finish; a pinning failure must allow retry.
     torch.cuda.synchronize()
+    _offloaded_state.extend(evicted)
     for storage, _ in _offloaded_state:
         storage.resize_(0)
     torch.cuda.empty_cache()
