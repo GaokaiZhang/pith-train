@@ -568,6 +568,7 @@ class DualPipeV(nn.Module):
             detached in place after its backward, so return loss.detach() if the value is needed
             once the step is done.
         """
+        assert not training.offloaded, "training state is offloaded; call reload_training_state"
         self.forward_only = not torch.is_grad_enabled()
 
         # Disable reshard and gradient sync after backward for FSDP
