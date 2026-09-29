@@ -4,6 +4,7 @@ Test CP sequence collectives and the packed zigzag partition.
 
 from dataclasses import dataclass
 from itertools import accumulate
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -165,6 +166,28 @@ def test_zigzag_varlen_index(cp_size: int) -> None:
     assert zigzag_varlen_index(0, 1, cu_seqlens, 15).tolist() == list(range(15))
     with pytest.raises(RuntimeError, match="whole packed sample's boundaries"):
         zigzag_varlen_index(0, 1, cu_seqlens, 16)
+
+
+@pytest.mark.parametrize("cp_size", [1, 2, 4])
+def test_packed_positions(cp_size: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Check positions directly: relative RoPE makes document resets invisible to attention tests.
+    Tensors stay on CPU; importing the model requires a GPU.
+    """
+    from pithtrain.models.qwen3_moe import Qwen3MoeModel
+
+    unit = 2 * cp_size
+    seqlens = [unit, 7 * unit, 0, 3 * unit]
+    cu_seqlens = torch.tensor([0, *accumulate(seqlens)], dtype=torch.int32)
+    T = sum(seqlens)
+    model = SimpleNamespace(rotary_emb=lambda S: (torch.arange(S), torch.arange(S)))
+    monkeypatch.setattr(distributed, "device", torch.device("cpu"), raising=False)
+    monkeypatch.setattr(distributed, "cp_size", cp_size, raising=False)
+    for cp_rank in range(cp_size):
+        monkeypatch.setattr(distributed, "cp_rank", cp_rank, raising=False)
+        positions, _ = Qwen3MoeModel.forward_posemb(model, T // cp_size, cu_seqlens)
+        expected = [i for n in seqlens for span in zigzag_spans(cp_rank, cp_size, n) for i in span]
+        assert positions.view(-1).tolist() == expected
 
 
 @dataclass
