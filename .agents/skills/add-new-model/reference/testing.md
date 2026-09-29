@@ -27,7 +27,7 @@ If the test exceeds the timeout, it is **hanging**, not slow. The usual cause is
 
 Run `tests/test_dualpipev.py` on one GPU at `--pp-size 1 --ep-size 1`. This is the lightest rung of the same harness the rest of the ladder uses - no PP P2P, no EP all-to-all - so it isolates modeling bugs, NaNs, and compile drift before any distributed machinery is involved. Wire the new model into `tests/test_dualpipev.py` first (see below).
 
-**What it checks:** the model builds at `phase=-1` (single-device reference) and at `phase=0` / `phase=1` (the two DualPipeV chunks); the eager `reference_forward` autograd path runs to completion; and the pipelined 5-stage `forward` (driven through `DualPipeV.step`, which records each stage into the model's `ChunkRecord` via `model_forward`) matches `reference_forward` on both loss and per-parameter gradients.
+**What it checks:** the model builds at `phase=-1` (single-device reference) and at `phase=0` / `phase=1` (the two DualPipeV chunks); the eager `reference_forward` autograd path runs to completion; the pipelined 5-stage `forward` (driven through `DualPipeV.step`, which records each stage into the model's `ChunkRecord` via `model_forward`) matches `reference_forward` on both loss and per-parameter gradients; and the weights `iter_canonical_parameters` gathers for weight sync equal the reference weights.
 
 ```bash
 # Check GPUs
@@ -92,6 +92,7 @@ CUDA_VISIBLE_DEVICES=<g0>,<g1>,<g2>,<g3> timeout 180 torchrun --nproc-per-node=4
 
 - **Loss match:** `torch.allclose(loss, loss_ref, rtol=1e-3, atol=1e-3)`.
 - **Gradient match:** `calc_diff < 1e-2` per parameter, where `calc_diff = 1 - 2*(x*y).sum() / (x*x + y*y).sum()` (cosine-ish).
+- **Weight sync:** after the gradient check, every tensor `iter_canonical_parameters` yields must equal the reference weight under its canonical name, and each rank must yield every name of its two stages exactly once, including every routed expert of its EP rank.
 
 Loss matches, grads don't -> issue in backward. Loss doesn't match -> issue in forward.
 
