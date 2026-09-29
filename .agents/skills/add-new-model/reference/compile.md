@@ -25,7 +25,7 @@ These are not recommendations. They are enforced by the framework: test failures
 
 ```python
 @torch.compile(fullgraph=True)
-def forward_stage1_compute(self, hidden_states, rotary_posemb, cu_seqlens=None):
+def forward_stage1_compute(self, hidden_states, rotary_posemb, cu_seqlens=None, replay_idx=None):
     residual = hidden_states
     hidden_states = self.input_layernorm(hidden_states)
     hidden_states = self.self_attn(hidden_states, rotary_posemb, cu_seqlens)
@@ -38,11 +38,11 @@ def forward_stage1_compute(self, hidden_states, rotary_posemb, cu_seqlens=None):
     if hasattr(self.mlp, "shared_experts"):
         residual = residual + self.mlp.shared_experts(hidden_states)
 
-    topk_idx, topk_weight, lb_loss = self.mlp.gate(hidden_states)
+    topk_idx, topk_weight, lb_loss = self.mlp.gate(hidden_states, replay_idx)
     return hidden_states, residual, topk_idx, topk_weight, lb_loss
 ```
 
-The `MoELoadBalanceLossTracker.add(lb_loss)` call and the dispatch prep stay in the *eager* `forward_stage1` wrapper - see `protocol.md`.
+The `replay_indices` lookup, the `MoELoadBalanceLossTracker.add(lb_loss)` call and the dispatch prep stay in the *eager* `forward_stage1` wrapper - see `protocol.md`.
 
 ### Region 2 (optional): router / gate `forward`
 
@@ -51,10 +51,13 @@ GPT-OSS compiles its router; if you follow that pattern, the whole method must t
 ```python
 class <Prefix>TopKRouter(nn.Module):   # or <Prefix>Gate - match HF
     @torch.compile(fullgraph=True)
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, replay_idx=None):
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         logits = F.linear(hidden_states, self.weight, self.bias)  # bias optional
         topk_logits, topk_idx = torch.topk(logits, k=self.num_experts_per_tok, dim=-1, sorted=True)
+        if replay_idx is not None:  # a graph input, resolved in eager by the layer
+            topk_idx = replay_idx
+            topk_logits = logits.gather(-1, topk_idx)
         topk_weight = F.softmax(topk_logits, dim=-1, dtype=torch.float32)
 
         if self.load_balance_loss_fn is None:
