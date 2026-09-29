@@ -66,3 +66,9 @@ tell from the layer alone: DualPipeV interleaves a rank's two chunks across micr
 set before each forward only, which suffices because the backward replays the saved graph without
 re-entering module code.
 """
+
+offloaded: bool = False
+"""
+True between offload_training_state and reload_training_state. Tensors retain their shapes over
+zero-byte device storages; step, checkpoint save and weight sync must reject reads in this state.
+"""

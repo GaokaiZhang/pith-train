@@ -272,6 +272,7 @@ def iter_canonical_parameters() -> Iterator[Tuple[str, torch.Tensor]]:
     so every rank must consume every entry: filtering or stopping early hangs the others. Only
     this rank's layers are yielded; joining pipeline stages is the caller's job.
     """
+    assert not training.offloaded, "training state is offloaded; call reload_training_state"
     model = training.model
     named_modules = dict(model.named_modules())
     for localized_fqn, param in model.named_parameters():
@@ -502,6 +503,7 @@ def save_checkpoint(root: Path, step: int) -> None:
     entries locally by unwrap_dtensor_experts, so each rank writes only the
     expert keys it owns. Non-expert DTensors stay as CPU DTensors and DCP saves each rank's shard.
     """
+    assert not training.offloaded, "training state is offloaded; call reload_training_state"
     stdout = logging.stdout
     model, optimizers, schedulers = training.model, training.optimizers, training.schedulers
     location = Path(root, "torch-dcp", "%08d" % step)

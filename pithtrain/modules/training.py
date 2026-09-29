@@ -516,8 +516,11 @@ def offload_training_state() -> None:
     Move this rank's parameter shards and optimizer state to pinned host memory and free the GPU
     memory behind them. Only the storages are resized away, so every tensor, view and optimizer
     state entry survives and reload has nothing to rebuild. Gradients are not included.
+
+    No state reads are valid until reload_training_state clears training.offloaded.
+    A no-op when already offloaded.
     """
-    if _offloaded_state:
+    if training.offloaded:
         return
 
     # An unsharded parameter is a separate allocation the walk below would not see.
@@ -534,6 +537,7 @@ def offload_training_state() -> None:
     # Publish and free only after all copies finish; a pinning failure must allow retry.
     torch.cuda.synchronize()
     _offloaded_state.extend(evicted)
+    training.offloaded = True
     for storage, _ in _offloaded_state:
         storage.resize_(0)
     torch.cuda.empty_cache()
@@ -543,7 +547,7 @@ def reload_training_state() -> None:
     """
     Bring the offloaded state back onto the device. A no-op when nothing was offloaded.
     """
-    if not _offloaded_state:
+    if not training.offloaded:
         return
 
     for storage, host in _offloaded_state:
@@ -555,6 +559,7 @@ def reload_training_state() -> None:
     for _, host in _offloaded_state:
         _pinned_buffers[host.numel()].append(host)
     _offloaded_state.clear()
+    training.offloaded = False
 
 
 def setup_training(cfg: object) -> None:
