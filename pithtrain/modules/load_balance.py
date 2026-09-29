@@ -287,9 +287,9 @@ def replay_indices(
 
     Resolved in eager so the compiled gate gets them as an input, not traced Python state.
     router_replay(num_tokens, top_k) returns expert ids [num_tokens, top_k] as a contiguous int64
-    or int32 tensor on the current device, rows in loader token order (zigzag under CP). Called
-    once per gate per forward, never from a backward; each gate's store keys routes by layer and
-    training.current_microbatch.
+    or int32 tensor on the current device, rows in loader token order (zigzag under CP). Layers
+    with another token order relayout the rows. Called once per gate per forward, never from a
+    backward; each gate's store keys routes by layer and training.current_microbatch.
     """
     if gate.router_replay is None:
         return None
