@@ -1,6 +1,5 @@
 """
-Test DualPipeV against a single-device reference.
-The loss and gradients are compared with the reference implementation.
+Compare DualPipeV loss, gradients and canonical weight export with a single-device reference.
 """
 
 import argparse
@@ -22,6 +21,7 @@ from pithtrain.models.deepseek_v2 import DeepSeekV2Model, DeepSeekV2MoEGate
 from pithtrain.models.gpt_oss import GptOssExperts, GptOssModel, GptOssTopKRouter
 from pithtrain.models.qwen3_moe import Qwen3MoeGate, Qwen3MoeModel
 from pithtrain.models.qwen35_moe import Qwen35MoeModel, Qwen35MoeTopKRouter
+from pithtrain.modules.checkpoint import iter_canonical_parameters
 from pithtrain.modules.distributed import DistributedCfg, setup_distributed
 from pithtrain.operators.grouped_linear import GroupedLinear
 from pithtrain.pipeline import DualPipeV, Microbatch
@@ -144,6 +144,20 @@ def shard_experts(model, ep_rank, ep_size):
             setattr(model, name, new_mod)
         else:
             shard_experts(child, ep_rank, ep_size)
+
+
+def canonical_state_dict(model: nn.Module, ep_rank: int) -> dict:
+    """
+    Expand this EP rank's expert stacks under global indices, independently of checkpoint.unpack.
+    """
+    result = {}
+    for name, value in model.state_dict().items():
+        if ".experts." not in name:
+            result[name] = value
+            continue
+        for idx, expert in enumerate(value, start=ep_rank * value.shape[0]):
+            result[name.replace(".experts.", ".experts.%d." % idx, 1)] = expert
+    return result
 
 
 def apply_fsdp(model, dtype):
@@ -490,6 +504,20 @@ def main(model_name: str):
     if distributed.rank == 0:
         print("[INFO] All gradients match the reference.", flush=True)
     torch.distributed.barrier()
+
+    # Negate after the gradient check to reject stale weights without affecting that check.
+    training.model = dualpipev_model
+    with torch.no_grad():
+        for p in dualpipev_model.parameters():
+            p.to_local().neg_()
+    reference = canonical_state_dict(local_full_modules[0], ep_rank)
+    reference.update(canonical_state_dict(local_full_modules[1], ep_rank))
+    for name, tensor in iter_canonical_parameters():
+        assert torch.equal(tensor, -reference.pop(name)), (distributed.rank, name)
+    assert not reference, (distributed.rank, sorted(reference)[:5])
+    torch.distributed.barrier()
+    if distributed.rank == 0:
+        print("[INFO] All canonical parameters match the reference.", flush=True)
 
 
 @record
