@@ -121,7 +121,7 @@ The pipeline is **BSHD** end to end: hidden states are `(B, S, hidden)` through 
 
 ### Optimized Operators (`pithtrain/operators/`)
 
-- **Ring Attention** (`ring_attention.py`) — zigzag ring attention for context parallelism (standard and MLA-aware variants)
+- **Ring Attention** (`ring_attention.py`) — zigzag ring attention for context parallelism (standard, packed and MLA-aware variants)
 - **CP Sequence** (`cp_sequence.py`) — defines both CP sequence layouts, exposing the zigzag partition as `zigzag_spans` (and, one packed document at a time, as `zigzag_varlen_index`), converts the hidden stream between them, and fetches the conv state a depthwise convolution needs, the tokens before a shard, from the previous rank
 - **FlashAttention v4** (`flash_attn_v4.py`) — Wrapper around the FA4 kernel
 - **MLA** — Multi-head Latent Attention is implemented inside the DeepSeek model (`models/deepseek_v2.py`), with MLA-aware ring attention in `ring_attention.py`
