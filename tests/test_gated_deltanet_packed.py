@@ -17,7 +17,6 @@ from tests.utilities import launch
 class PackedRequest:
     lengths: tuple[int, ...]
     compile: bool = False
-    atol: float = 2e-2
 
 
 def relative_error(ref: torch.Tensor, got: torch.Tensor) -> float:
@@ -75,7 +74,7 @@ def verify_packed(req: PackedRequest) -> None:
     for name, ref in reference.items():
         error = relative_error(ref, packed[name])
         control = relative_error(ref, leaky[name])
-        if not error < req.atol:
+        if not error < 2e-2:
             raise AssertionError(f"{name} leaks across documents: {error=:.2e} {control=:.2e}")
         if name in ("out", "dx") and not control > 10 * error:
             raise AssertionError(f"{name} control too close: {error=:.2e} {control=:.2e}")
