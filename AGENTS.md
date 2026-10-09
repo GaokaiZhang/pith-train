@@ -109,7 +109,7 @@ Models implement `ModelProtocol` with layers that expose `forward_stage1`, `forw
 
 ### Tensor Layouts & Sequence Packing
 
-The pipeline is **BSHD** end to end: hidden states are `(B, S, hidden)` through embeddings, norms, attention, MoE, residuals, the P2P activations between pipeline stages, and the loss. Nothing outside attention and Qwen3.5's Gated DeltaNet is aware of packing.
+The pipeline is **BSHD** end to end: hidden states are `(B, S, hidden)` through embeddings, norms, attention, MoE, residuals, the P2P activations between pipeline stages, and the loss. Nothing outside attention is aware of packing.
 
 **Packed / variable-length (SFT) training** enforces `micro_batch_size == 1`. A micro-batch is `(1, S, hidden)` where `S` is the total token count and several documents are concatenated along the `S` axis; a per-sample `cu_seqlens` (int32 cumulative document offsets `[0, …, S]`) marks the boundaries. So the residual stream is semantically `TD` (`T = S` tokens × `hidden`) wearing a batch-of-one BSHD coat — kept 3-D on purpose so (a) every BSHD-assuming module (norm, MoE, embed, loss, P2P) is untouched and (b) the caller can still split the batch into micro-batches along dim 0 (the `B=1` is that seam).
 
@@ -117,7 +117,7 @@ The pipeline is **BSHD** end to end: hidden states are `(B, S, hidden)` through 
 
 **Positions**: `forward_posemb(S, cu_seqlens)` builds per-document-reset positions when packed. Because RoPE is relative and the mask is block-diagonal, at `cp_size == 1` this reset is bit-identical to contiguous global positions — it becomes load-bearing only under context parallelism (deferred). **Loss**: boundary/prompt tokens are masked with `-100` (no separate loss-mask tensor) and the loss is token-weighted (the objective returns the loss summed over the micro-batch's tokens; the step divides by the global non-ignored token count).
 
-`cu_seqlens` rides on each `Microbatch`, which every pipeline rank receives, and is threaded through the pipeline as an explicit forward argument (a sibling of `rotary_posemb`, not a module attribute), consumed only by attention, the per-document position reset in `forward_posemb`, and Qwen3.5's Gated DeltaNet. The model, engine, and loss support variable-length packing for qwen3, deepseek-v2-lite, gpt-oss, and qwen3.5, validated with synthetic `cu_seqlens` via `PACKED_SEQLEN=1 bash tests/test_dualpipev.sh <config>`. Gated DeltaNet masks conv taps across document boundaries and resets recurrent state at each document start; this avoids FLA varlen's host sync for chunk-grid sizing. `tests/test_gated_deltanet_packed.py` compares packed output and gradients against separate documents. Packing under CP remains unsupported. The packed **data pipeline** — turning a tokenized corpus into `cu_seqlens`-bearing samples, and choosing whole-document packing — is a deferred follow-up; no training entrypoint sets `cu_seqlens` yet, so pretraining is the only live data path.
+`cu_seqlens` rides on each `Microbatch`, which every pipeline rank receives, and is threaded through the pipeline as an explicit forward argument (a sibling of `rotary_posemb`, not a module attribute), consumed only by attention and the per-document position reset in `forward_posemb`. The packed **data pipeline** — turning a tokenized corpus into `cu_seqlens`-bearing samples, and choosing whole-document packing — is a deferred follow-up; no training entrypoint sets `cu_seqlens` yet, so pretraining is the only live data path.
 
 ### Optimized Operators (`pithtrain/operators/`)
 
