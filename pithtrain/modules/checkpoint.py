@@ -122,10 +122,11 @@ def unwrap_dtensor_experts(value: Any, expected_n: int) -> Optional[Tuple[Any, i
         if dt.placements[shard_dim].dim != 0:
             return None
         local = dt._local_tensor
-        if local.shape[0] >= expected_n:
-            return None
         dp_rank = dt.device_mesh.get_local_rank(shard_dim)
         dp_size = dt.device_mesh.size(shard_dim)
+        # dp_size is the same on every rank, so all ranks agree on whether to unwrap.
+        if dp_size == 1:
+            return None
         # FSDP splits like torch.chunk: ceil(n / size) experts per rank until they run out.
         dp_offset = dp_rank * ((expected_n + dp_size - 1) // dp_size)
         return local, local.shape[0], dp_offset
