@@ -26,8 +26,9 @@ def log_prob_fwd(
     """
     Online FP32 reduction per row: z = x / T, d = sum(exp(z - m)),
     s = sum(exp(z - m) * (z - m)). Then log p = (z - m) - log(d), H = log(d) - s / d.
-    Keep m and log(d) separate to avoid cancellation at large |m|. Seed m with a logit
-    so the first rescale of s is finite.
+    Keep m and log(d) separate to avoid cancellation at large |m|. Seed m with the first
+    logit, clamped to be finite, so the first rescale of s is finite. -inf logits, like the
+    padding lanes, add 0 to s (0 log 0 = 0).
     """
     # torch.compile passes a Python float as fp64; keep the arithmetic in fp32.
     inv_temperature = tl.cast(inv_temperature, tl.float32)
@@ -35,7 +36,7 @@ def log_prob_fwd(
     X_ptr += row * X_stride
     y = tl.load(Y_ptr + row)
 
-    m = tl.load(X_ptr).to(tl.float32) * inv_temperature
+    m = tl.maximum(tl.load(X_ptr).to(tl.float32) * inv_temperature, -3.4028234663852886e38)
     d = 0.0
     s = 0.0
     for i in range(0, n_cols, BLOCK_SIZE):
@@ -46,7 +47,7 @@ def log_prob_fwd(
         m_new = tl.maximum(m, tl.max(z))
         scale = tl.exp(m - m_new)
         e = tl.exp(z - m_new)
-        s = (s + (m - m_new) * d) * scale + tl.sum(e * tl.where(mask, z - m_new, 0.0))
+        s = (s + (m - m_new) * d) * scale + tl.sum(e * tl.where(z > float("-inf"), z - m_new, 0.0))
         d = d * scale + tl.sum(e)
         m = m_new
 
@@ -82,6 +83,7 @@ def log_prob_bwd(
 
     Fold the target term into its owning lane; a later scalar correction would race with
     other warps' stores. Invalid targets have constant log p = 0, so their g_logp is dropped.
+    -inf logits have p_i = 0; their log p_i is taken as 0, so the second term is 0, not NaN.
     """
     inv_temperature = tl.cast(inv_temperature, tl.float32)
     row = tl.program_id(0).to(tl.int64)
@@ -100,6 +102,7 @@ def log_prob_bwd(
         x = tl.load(X_ptr + offsets, mask=mask, other=0.0)
         logp = (x.to(tl.float32) * inv_temperature - m) - log_sum
         p = tl.exp(logp)
+        logp = tl.where(logp > float("-inf"), logp, 0.0)
         grad = tl.where(offsets == y, g_logp, 0.0) - p * (g_logp + g_entropy * (logp + entropy))
         tl.store(X_ptr + offsets, (grad * inv_temperature).to(x.dtype), mask=mask)
 
@@ -181,6 +184,7 @@ def log_prob(
 
     Invalid targets (including -100) give log-probability 0 and no log-probability gradient.
     Entropy is still computed: the objective must mask both outputs to ignore a row.
+    -inf logits, such as masked tokens, add nothing to the entropy (0 log 0 = 0).
 
     Parameters
     ----------
@@ -211,7 +215,7 @@ def reference_log_prob(
     """
     dtype = torch.promote_types(inp.dtype, torch.float32)
     logp = torch.log_softmax(inp.to(dtype) / temperature, dim=-1)
-    entropy = -(logp.exp() * logp).sum(dim=-1)
+    entropy = -(logp.exp() * torch.where(logp > float("-inf"), logp, 0.0)).sum(dim=-1)
     valid = (target >= 0) & (target < inp.size(-1))
     logp = logp.gather(-1, torch.where(valid, target, 0).unsqueeze(-1)).squeeze(-1)
     return torch.where(valid, logp, 0.0), entropy

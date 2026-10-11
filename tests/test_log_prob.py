@@ -12,14 +12,19 @@ def forward_backward(fn, logits, target, temperature, grad_logp, grad_entropy):
     return logp.detach(), entropy.detach(), inp.grad
 
 
+@pytest.mark.parametrize("masked", [False, True])
 @pytest.mark.parametrize("temperature", [1.0, 0.6])
 @pytest.mark.parametrize("vocab", [151936, 8192, 1000])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("n_rows", [1, 67])
-def test_log_prob(n_rows, dtype, vocab, temperature):
+def test_log_prob(n_rows, dtype, vocab, temperature, masked):
     generator = torch.Generator(device="cuda").manual_seed(0)
     logits = torch.randn((n_rows, vocab), generator=generator, device="cuda") * 3
     logits = logits.to(dtype)
+    if masked:
+        # Every other token masked to -inf, from column 0, which seeds the running max; row 0
+        # keeps only its last token, so its earlier tiles are entirely -inf.
+        logits[:, ::2] = logits[0, :-1] = float("-inf")
     target = torch.randint(vocab, (n_rows,), generator=generator, device="cuda")
     # The first and last lane, and both sides of the 32768-wide tile boundary.
     for row, index in enumerate((0, 32767, 32768, 65535, 65536, vocab - 1)):
