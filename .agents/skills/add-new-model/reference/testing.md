@@ -92,7 +92,7 @@ CUDA_VISIBLE_DEVICES=<g0>,<g1>,<g2>,<g3> timeout 180 torchrun --nproc-per-node=4
 
 - **Loss match:** `torch.allclose(loss, loss_ref, rtol=1e-3, atol=1e-3)`.
 - **Gradient match:** `calc_diff < 1e-2` per parameter, where `calc_diff = 1 - 2*(x*y).sum() / (x*x + y*y).sum()` (cosine-ish).
-- **Weight sync:** after the gradient check, every tensor `iter_canonical_parameters` yields must equal the reference weight under its canonical name, and each rank must yield every name of its two stages exactly once, including every routed expert of its EP rank.
+- **Weight sync:** after the gradient check, export twice, changing every weight between exports. Each tensor `iter_canonical_parameters` yields must equal the corresponding reference value, and each rank must yield every name of its two stages exactly once per export, including every routed expert of its EP rank. The second export rejects stale cached weights.
 
 Loss matches, grads don't -> issue in backward. Loss doesn't match -> issue in forward.
 

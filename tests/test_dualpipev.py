@@ -502,18 +502,22 @@ def main(model_name: str):
         print("[INFO] All gradients match the reference.", flush=True)
     torch.distributed.barrier()
 
-    # Negate every weight and set its zeros to 1 after the gradient check to reject stale weights.
+    # Export before and after changing the weights to reject caches retained across syncs.
     training.model = dualpipev_model
-    with torch.no_grad():
-        for p in dualpipev_model.parameters():
-            w = p.to_local()
-            w.neg_().masked_fill_(w == 0, 1)
-    reference = canonical_state_dict(local_full_modules[0], ep_rank)
-    reference.update(canonical_state_dict(local_full_modules[1], ep_rank))
-    for name, tensor in iter_canonical_parameters():
-        w = reference.pop(name)
-        assert torch.equal(tensor, w.neg().masked_fill_(w == 0, 1)), (distributed.rank, name)
-    assert not reference, (distributed.rank, sorted(reference)[:5])
+    for updated in (False, True):
+        if updated:
+            with torch.no_grad():
+                for p in dualpipev_model.parameters():
+                    w = p.to_local()
+                    w.neg_().masked_fill_(w == 0, 1)
+        reference = canonical_state_dict(local_full_modules[0], ep_rank)
+        reference.update(canonical_state_dict(local_full_modules[1], ep_rank))
+        for name, tensor in iter_canonical_parameters():
+            w = reference.pop(name)
+            if updated:
+                w = w.neg().masked_fill_(w == 0, 1)
+            assert torch.equal(tensor, w), (distributed.rank, name, updated)
+        assert not reference, (distributed.rank, sorted(reference)[:5])
     torch.distributed.barrier()
     if distributed.rank == 0:
         print("[INFO] All canonical parameters match the reference.", flush=True)
