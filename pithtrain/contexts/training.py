@@ -67,6 +67,6 @@ offloaded: bool = False
 """
 True between offload_training_state and reload_training_state.
 
-Tensors keep their shapes over zero-byte device storages, so DualPipeV.step, save_checkpoint,
+Tensors keep their shapes over zero-byte device storages, so model.step, save_checkpoint,
 load_checkpoint and iter_canonical_parameters reject this state.
 """
