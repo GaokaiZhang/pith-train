@@ -150,7 +150,7 @@ CUDA_VISIBLE_DEVICES=<g0> timeout 180 torchrun --nproc-per-node=1 $RDZV \
 
 Run the ladder in that order. After each step, stop and diagnose before continuing if anything fails. `nvidia-smi` before each run. Timeouts 120-180s; past that it's hanging (compile retrace or deadlocked all-to-all) - kill, don't raise.
 
-**Gate:** all 4 configs pass (loss `rtol=atol=1e-3`, per-param `calc_diff < 1e-2`).
+**Gate:** all 4 configs pass (loss `rtol=atol=1e-3`, per-param `calc_diff < 1e-2`, weight sync `torch.equal`).
 
 ---
 
