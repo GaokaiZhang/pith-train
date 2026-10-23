@@ -170,16 +170,17 @@ class LogProb(torch.autograd.Function):
         return inp, None, None
 
 
-def log_prob(
+def log_prob_inplace(
     inp: torch.Tensor,
     target: torch.Tensor,
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Fused per-token log-probability and entropy of a tempered softmax, with an in-place backward.
+    Fused per-token log-probability and entropy of a tempered softmax.
 
-    FP32 arithmetic; gradients use ``inp.dtype``. Backward consumes the logits: do not read them
-    afterwards or save them in another autograd consumer. Use one call per logits tensor,
+    Forward preserves the logits. Backward overwrites them with their gradients.
+    FP32 arithmetic; gradients use ``inp.dtype``. Do not read the logits after backward
+    or save them in another autograd consumer. Use one call per logits tensor,
     including views; backward invalidates the shared version counter.
 
     Invalid targets (including -100) give log-probability 0 and no log-probability gradient.

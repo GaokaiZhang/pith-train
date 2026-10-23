@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from pithtrain.operators.log_prob import log_prob, reference_log_prob
+from pithtrain.operators.log_prob import log_prob_inplace, reference_log_prob
 
 
 def forward_backward(fn, logits, target, temperature, grad_logp, grad_entropy):
@@ -35,7 +35,7 @@ def test_log_prob(n_rows, dtype, vocab, temperature, masked):
     grad_logp[6::3] = grad_entropy[6::3] = 0.0
 
     args = (logits, target, temperature, grad_logp, grad_entropy)
-    logp, entropy, grad = forward_backward(log_prob, *args)
+    logp, entropy, grad = forward_backward(log_prob_inplace, *args)
     expected_logp, expected_entropy, expected_grad = forward_backward(reference_log_prob, *args)
     torch.testing.assert_close(logp, expected_logp, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(entropy, expected_entropy, rtol=1e-5, atol=1e-5)
@@ -64,7 +64,7 @@ def test_log_prob_extreme_logits(dtype):
     # path does and the kernels may, costs about 1e-3 in log p at |x| = 1e4.
     for temperature in (1.0, 0.5):
         logp, entropy, grad = forward_backward(
-            log_prob, logits, target, temperature, grad_logp, grad_entropy
+            log_prob_inplace, logits, target, temperature, grad_logp, grad_entropy
         )
         grads = (grad_logp.double(), grad_entropy.double())
         truth = forward_backward(reference_log_prob, logits.double(), target, temperature, *grads)
@@ -81,7 +81,7 @@ def test_log_prob_out_of_range_targets():
     target = torch.tensor([-100, 0, -1, 8191, 8192, 2**40], device="cuda")
     grad_logp, grad_entropy = torch.randn((2, 6), generator=generator, device="cuda")
     args = (logits, target, 0.6, grad_logp, grad_entropy)
-    logp, entropy, grad = forward_backward(log_prob, *args)
+    logp, entropy, grad = forward_backward(log_prob_inplace, *args)
     expected_logp, expected_entropy, expected_grad = forward_backward(reference_log_prob, *args)
     torch.testing.assert_close(logp, expected_logp, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(entropy, expected_entropy, rtol=1e-5, atol=1e-5)
@@ -94,7 +94,7 @@ def test_log_prob_sum_of_outputs():
     logits = torch.randn((8192, 33), generator=generator, device="cuda", dtype=torch.bfloat16).t()
     target = torch.randint(8192, (33, 2), generator=generator, device="cuda")[:, 0]
     grads = []
-    for fn in (log_prob, reference_log_prob):
+    for fn in (log_prob_inplace, reference_log_prob):
         inp = logits.detach().clone().requires_grad_()
         logp, entropy = fn(inp, target, 0.6)
         (logp.sum() - 0.01 * entropy.sum()).backward()
@@ -109,8 +109,8 @@ def test_log_prob_under_torch_compile():
     target = torch.randint(8192, (16,), generator=generator, device="cuda")
     grad_logp, grad_entropy = torch.randn((2, 16), generator=generator, device="cuda")
     args = (logits, target, 0.6, grad_logp, grad_entropy)
-    compiled = forward_backward(torch.compile(log_prob, fullgraph=True), *args)
-    eager = forward_backward(log_prob, *args)
+    compiled = forward_backward(torch.compile(log_prob_inplace, fullgraph=True), *args)
+    eager = forward_backward(log_prob_inplace, *args)
     assert all(torch.equal(c, e) for c, e in zip(compiled, eager))
 
 
@@ -122,9 +122,9 @@ def test_log_prob_backward_is_deterministic(dtype):
     target = torch.randint(vocab, (128,), generator=generator, device="cuda")
     target[:6] = torch.tensor([0, 32767, 32768, 65535, 65536, vocab - 1])
     grad_logp, grad_entropy = torch.randn((2, 128), generator=generator, device="cuda")
-    first = forward_backward(log_prob, logits, target, 1.0, grad_logp, grad_entropy)[2]
+    first = forward_backward(log_prob_inplace, logits, target, 1.0, grad_logp, grad_entropy)[2]
     for _ in range(8):
-        again = forward_backward(log_prob, logits, target, 1.0, grad_logp, grad_entropy)[2]
+        again = forward_backward(log_prob_inplace, logits, target, 1.0, grad_logp, grad_entropy)[2]
         assert torch.equal(again, first)
 
 
@@ -143,7 +143,7 @@ def test_log_prob_memory():
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
     base = torch.cuda.memory_allocated()
-    logp, entropy = log_prob(logits, target)
+    logp, entropy = log_prob_inplace(logits, target)
     (grad,) = torch.autograd.grad((logp, entropy), logits, (grad_logp, grad_entropy))
     peak = torch.cuda.max_memory_allocated() - base
     assert grad.data_ptr() == logits.data_ptr()
@@ -160,11 +160,13 @@ def test_log_prob_memory():
 def test_log_prob_rejects_other_saved_uses_of_the_logits():
     logits = torch.randn((4, 1000), device="cuda", requires_grad=True)
     target = torch.randint(1000, (4,), device="cuda")
-    lse = torch.logsumexp(logits, dim=-1)  # saves logits; its backward runs after log_prob's
-    logp, _ = log_prob(logits, target)
+    lse = torch.logsumexp(
+        logits, dim=-1
+    )  # saves logits; its backward runs after log_prob_inplace's
+    logp, _ = log_prob_inplace(logits, target)
     with pytest.raises(RuntimeError, match="modified by an inplace operation"):
         (logp + lse).sum().backward()
-    first, _ = log_prob(logits[:2], target[:2])
-    second, _ = log_prob(logits[2:], target[2:])
+    first, _ = log_prob_inplace(logits[:2], target[:2])
+    second, _ = log_prob_inplace(logits[2:], target[2:])
     with pytest.raises(RuntimeError, match="modified by an inplace operation"):
         (first + second).sum().backward()
