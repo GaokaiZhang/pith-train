@@ -28,13 +28,13 @@ from pithtrain.modules.checkpoint import iter_canonical_parameters, load_checkpo
 from pithtrain.modules.distributed import setup_distributed
 from pithtrain.modules.logging import setup_logging
 from pithtrain.modules.training import (
-    _pinned_buffers,
-    _take_pinned,
     make_constant_scheduler,
     make_muon_optimizer,
+    offload_buffer_pool,
     offload_training_state,
     reload_training_state,
     setup_model,
+    take_pinned_buffer,
 )
 from pithtrain.tasks.pretrain_lm import PretrainLMCfg
 
@@ -89,7 +89,7 @@ def raises(fn, text: str) -> bool:
 
 
 def pooled() -> list[int]:
-    return sorted(buf.data_ptr() for bufs in _pinned_buffers.values() for buf in bufs)
+    return sorted(buf.data_ptr() for bufs in offload_buffer_pool.values() for buf in bufs)
 
 
 def main(scratch: Path):
@@ -119,8 +119,10 @@ def main(scratch: Path):
     assert_bitwise(snapshot(), snap, "reload with nothing offloaded")
 
     # Fail after one queued copy; retry must offload the entire state.
-    fail_second = dict(wraps=_take_pinned, side_effect=[mock.DEFAULT, RuntimeError("no memory")])
-    with mock.patch("pithtrain.modules.training._take_pinned", **fail_second):
+    fail_second = dict(
+        wraps=take_pinned_buffer, side_effect=[mock.DEFAULT, RuntimeError("no memory")]
+    )
+    with mock.patch("pithtrain.modules.training.take_pinned_buffer", **fail_second):
         assert raises(offload_training_state, "no memory")
     assert not training.offloaded
     assert_bitwise(snapshot(), snap, "failed offload")
@@ -152,7 +154,7 @@ def main(scratch: Path):
 
         if cycle == 0:
             pool = pooled()
-            pool_bytes = sum(b.numel() for bufs in _pinned_buffers.values() for b in bufs)
+            pool_bytes = sum(b.numel() for bufs in offload_buffer_pool.values() for b in bufs)
             assert pool_bytes == state_bytes, (pool_bytes, state_bytes)
         assert pooled() == pool, f"cycle {cycle} allocated new pinned buffers"
         rprint(
